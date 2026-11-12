@@ -33,7 +33,9 @@ test('local API and real FFmpeg HLS downloads', { timeout: 90000 }, async t => {
   const playlist = await fs.readFile(path.join(sourceDir, 'index.m3u8'), 'utf8');
   const segments = playlist.split('\n').filter(line => line.endsWith('.ts'));
   assert.ok(segments.length >= 3);
-  const sourceServer = http.createServer(async (request, response) => {
+  const sourceRequests = new Set();
+  const sourceErrors = [];
+  const handleSourceRequest = async (request, response) => {
     const pathname = new URL(request.url, 'http://local').pathname;
     const basename = path.basename(pathname);
     if (pathname.startsWith('/protected/') && (request.headers.referer !== 'https://example.com/' || request.headers['user-agent'] !== 'StreamSaveTest')) { response.writeHead(403); response.end(); return; }
@@ -47,6 +49,17 @@ test('local API and real FFmpeg HLS downloads', { timeout: 90000 }, async t => {
       return;
     }
     response.writeHead(404); response.end();
+  };
+  const sourceServer = http.createServer((request, response) => {
+    const operation = handleSourceRequest(request, response);
+    sourceRequests.add(operation);
+    void operation.then(() => sourceRequests.delete(operation), error => {
+      sourceRequests.delete(operation);
+      sourceErrors.push(error);
+      // Retain fixture failures for the test assertion; HTTP listeners do not
+      // consume rejected async callbacks on their own.
+      response.destroy();
+    });
   });
   await new Promise(resolve => sourceServer.listen(0, '127.0.0.1', resolve));
   const sourceUrl = `http://127.0.0.1:${sourceServer.address().port}`;
@@ -57,7 +70,15 @@ test('local API and real FFmpeg HLS downloads', { timeout: 90000 }, async t => {
     assert.ok(response.ok, `${method} ${route}: ${JSON.stringify(result)}`);
     return result;
   };
-  t.after(async () => { await app.close(); await new Promise(resolve => { sourceServer.close(resolve); sourceServer.closeAllConnections(); }); await fs.rm(temp, { recursive: true, force: true }); });
+  t.after(async () => {
+    await app.close();
+    await new Promise(resolve => { sourceServer.close(resolve); sourceServer.closeAllConnections(); });
+    // Closing sockets does not cancel delayed request handlers. Drain them
+    // before removing files that a cancelled FFmpeg request may still read.
+    await Promise.allSettled([...sourceRequests]);
+    await fs.rm(temp, { recursive: true, force: true });
+    assert.equal(sourceErrors.length, 0, sourceErrors.map(error => error.stack || String(error)).join('\n'));
+  });
 
   await t.test('rejects cross-origin mutations and malformed batches', async () => {
     const response = await fetch(`${app.url}/api/queue/start`, { method: 'POST', headers: { Origin: 'https://evil.example', 'Content-Type': 'application/json' }, body: '{}' });

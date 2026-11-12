@@ -119,7 +119,13 @@ function renderTasks() {
     const running = status === 'downloading';
     const editable = ['queued','paused','failed','cancelled'].includes(status);
     const primaryAction = running || status === 'queued' ? actionButton('pause','暂停下载','pause') : status === 'completed' ? actionButton('open','在文件夹中显示','folder-open') : actionButton(status === 'failed' || status==='cancelled' ? 'retry':'resume',status === 'failed'?'重试下载':'继续下载',status === 'failed'?'arrow-clockwise':'play');
-    return `<article class="task-row" aria-label="${esc(task.name)}，${statuses[status]}"><div class="task-identity"><span class="task-file-icon">${icon('file-video')}<span class="task-number">${esc(String(task.number).padStart(Number(task.padWidth || state.settings.padWidth)||1,'0'))}</span></span><div class="task-name-wrap"><button class="task-name" data-task-action="preview" data-task-id="${id}" title="预览 ${esc(task.filename || task.name)}">${esc(task.filename || task.name)}</button><div class="task-meta"><span>${formatBytes(task.downloadedBytes)}</span><span class="meta-separator">·</span><span class="source-domain" title="${esc(domain)}">${esc(domain)}</span></div></div></div><div class="task-status status-${status}"><div class="status-top"><span class="status-label">${icon(statusIcons[status])}${statuses[status]}</span><span>${unknown ? '解析中' : `${Math.round(progress)}%`}</span></div><div class="progress-track" role="progressbar" aria-label="${esc(task.name)}下载进度" aria-valuemin="0" aria-valuemax="100" ${unknown?'':`aria-valuenow="${Math.round(progress)}"`}><span style="width:${unknown?24:progress}%" ${unknown?'class="pulse-progress"':''}></span></div>${task.error?`<p class="task-error" title="${esc(task.error)}">${esc(task.error)}</p>`:running&&task.speed?`<div class="task-speed">${formatBytes(task.speed)}/s</div>`:''}</div><div class="task-actions">${primaryAction}${editable?actionButton('edit','编辑名称与编号','pencil-simple'):actionButton('preview','视频预览','play')}${actionButton('delete','移除任务','trash')}</div></article>`;
+    const quality = task.selectedQuality;
+    const dimensions = quality?.width && quality?.height ? `${quality.width} × ${quality.height}` : quality?.label || '';
+    const rate = Number(quality?.bandwidth) > 0 ? `${(quality.bandwidth / 1000000).toFixed(2)} Mbps` : '';
+    const qualityText = quality ? [dimensions || '最高画质', rate].filter(Boolean).join(' · ') : ['queued','paused','downloading'].includes(status) ? '自动选择最高画质' : '保留源视频画质';
+    const available = (task.availableQualities || []).map(level => level.width && level.height ? `${level.width} × ${level.height}` : level.label).filter(Boolean);
+    const qualityHtml = `<div class="task-quality${quality ? ' resolved' : ''}" title="${esc(available.length > 1 ? `源提供 ${available.length} 档：${available.join('、')}；已选择最高画质` : qualityText)}">${icon('film-strip')}<span>${esc(qualityText)}</span>${quality && available.length > 1 ? '<span class="quality-highest">最高</span>' : ''}</div>`;
+    return `<article class="task-row" aria-label="${esc(task.name)}，${statuses[status]}"><div class="task-identity"><span class="task-file-icon">${icon('file-video')}<span class="task-number">${esc(String(task.number).padStart(Number(task.padWidth || state.settings.padWidth)||1,'0'))}</span></span><div class="task-name-wrap"><button class="task-name" data-task-action="preview" data-task-id="${id}" title="预览 ${esc(task.filename || task.name)}">${esc(task.filename || task.name)}</button><div class="task-meta"><span>${formatBytes(task.downloadedBytes)}</span><span class="meta-separator">·</span><span class="source-domain" title="${esc(domain)}">${esc(domain)}</span></div>${qualityHtml}</div></div><div class="task-status status-${status}"><div class="status-top"><span class="status-label">${icon(statusIcons[status])}${statuses[status]}</span><span>${unknown ? '解析中' : `${Math.round(progress)}%`}</span></div><div class="progress-track" role="progressbar" aria-label="${esc(task.name)}下载进度" aria-valuemin="0" aria-valuemax="100" ${unknown?'':`aria-valuenow="${Math.round(progress)}"`}><span style="width:${unknown?24:progress}%" ${unknown?'class="pulse-progress"':''}></span></div>${task.error?`<p class="task-error" title="${esc(task.error)}">${esc(task.error)}</p>`:running&&task.speed?`<div class="task-speed">${formatBytes(task.speed)}/s</div>`:''}</div><div class="task-actions">${primaryAction}${editable?actionButton('edit','编辑名称与编号','pencil-simple'):actionButton('preview','视频预览','play')}${actionButton('delete','移除任务','trash')}</div></article>`;
   }).join('');
 }
 
@@ -128,7 +134,7 @@ function formSettings() {
   return {
     concurrency:Number($('#concurrency').value), outputDir:$('#output-dir').value.trim(),
     namingPattern:preset === 'custom' ? $('#naming-pattern').value.trim() : preset,
-    startNumber:Number($('#start-number').value), padWidth:Number($('#pad-width').value), format:$('#format').value,
+    startNumber:Number($('#start-number').value), padWidth:Number($('#pad-width').value), format:$('#format').value, quality:'best',
     headers:{referer:$('#referer').value.trim(), userAgent:$('#user-agent').value.trim()}
   };
 }
@@ -260,7 +266,7 @@ function preview(task) {
   }
   const error = () => {message.classList.add('error');message.textContent=task.status==='completed'?'当前浏览器无法播放此视频格式，请在本地播放器中打开。':'预览未能载入。视频源可能限制跨域访问或需要请求头；你仍可尝试本地下载。';};
   video.onerror = error;
-  video.onloadedmetadata = ()=>{message.className='preview-message';message.textContent=task.status==='completed'?'正在预览本地已保存的视频。':'源视频预览 · 下载文件会保存到设置中的本地目录。';};
+  video.onloadedmetadata = ()=>{message.className='preview-message';message.textContent=task.status==='completed'?'正在预览本地已保存的视频。':'预览会随网速调整清晰度；下载固定为源提供的最高画质。';};
   if (task.status!=='completed' && !/\.(mp4|m4v|mov|webm|mkv|ts)(?:$|[?#])/i.test(source) && window.Hls?.isSupported()) {
     hls = new window.Hls({enableWorker:true,maxBufferLength:20});
     hls.on(window.Hls.Events.ERROR,(_,data)=>{if(data.fatal){hls?.destroy();hls=null;video.src=source;error();}});

@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { parseMasterPlaylist, chooseBestVariant, chooseAudioRendition, qualityMetadata } from './hls-playlist.mjs';
 
 export class ApiError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -186,7 +187,7 @@ export class DownloadManager {
     const added = [];
     let number = this.settings.startNumber;
     for (const item of validated) {
-      const task = { id: randomUUID(), ...item, number: number++, status: 'queued', progress: 0, downloadedBytes: 0, downloadedSeconds: 0, duration: null, speed: 0, error: '', createdAt: new Date().toISOString(), outputDir: this.settings.outputDir, format: this.settings.format, namingPattern: this.settings.namingPattern, padWidth: this.settings.padWidth, inputHeaders: { ...this.settings.headers } };
+      const task = { id: randomUUID(), ...item, number: number++, status: 'queued', selectedQuality: null, availableQualities: [], progress: 0, downloadedBytes: 0, downloadedSeconds: 0, duration: null, speed: 0, error: '', createdAt: new Date().toISOString(), outputDir: this.settings.outputDir, format: this.settings.format, namingPattern: this.settings.namingPattern, padWidth: this.settings.padWidth, inputHeaders: { ...this.settings.headers } };
       Object.assign(task, await this.reserveFilename(this.baseName(task), task.format, task.outputDir));
       this.tasks.push(task);
       added.push(publicTask(task));
@@ -318,14 +319,29 @@ export class DownloadManager {
   }
 
   probeDuration(task, record) {
-    if (!this.ffprobeAvailable) return Promise.resolve(null);
+    if (!this.ffprobeAvailable) return Promise.resolve(record.manifestDuration || null);
     return new Promise(resolve => {
       let output = '';
-      const child = spawn(this.ffprobePath, ['-v', 'error', ...this.inputArgs(task), '-show_entries', 'format=duration,format_name', '-of', 'json', task.url], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const child = spawn(this.ffprobePath, ['-v', 'error', ...this.inputArgs(task), '-show_entries', 'format=duration,format_name:stream=codec_type,width,height,avg_frame_rate,bit_rate', '-of', 'json', record.videoUrl || task.url], { stdio: ['ignore', 'pipe', 'ignore'] });
       record.probe = child;
       const timer = setTimeout(() => child.kill('SIGKILL'), 12000);
       timer.unref();
-      const finish = () => { clearTimeout(timer); record.probe = null; let duration = null; try { const format = JSON.parse(output).format; record.isHls ||= format?.format_name?.includes('hls'); const value = Number(format?.duration); if (Number.isFinite(value) && value > 0) duration = value; } catch { /* Missing duration is supported for direct files. */ } resolve(duration); };
+      const finish = () => {
+        clearTimeout(timer); record.probe = null;
+        let duration = record.manifestDuration || null;
+        try {
+          const result = JSON.parse(output);
+          record.isHls ||= result.format?.format_name?.includes('hls');
+          const value = Number(result.format?.duration);
+          if (Number.isFinite(value) && value > 0) duration = value;
+          const video = result.streams?.find(stream => stream.codec_type === 'video');
+          if (record.isHls && video) {
+            const [numerator, denominator = 1] = String(video.avg_frame_rate || '0').split('/').map(Number);
+            task.selectedQuality = qualityMetadata({ ...task.selectedQuality, width: video.width || 0, height: video.height || 0, frameRate: denominator ? numerator / denominator : 0, bandwidth: task.selectedQuality?.bandwidth || Number(video.bit_rate) || 0 });
+          }
+        } catch { /* Missing duration is supported for direct files. */ }
+        resolve(duration);
+      };
       child.stdout.on('data', data => { if (output.length < 65536) output += data; });
       child.once('error', finish);
       child.once('close', finish);
@@ -333,17 +349,19 @@ export class DownloadManager {
   }
 
   async startTask(task) {
-    const record = { child: null, probe: null, cancelled: false, lastBytes: 0, lastTime: Date.now(), done: null };
+    const record = { child: null, probe: null, cancelled: false, lastBytes: 0, lastTime: Date.now(), done: null, videoUrl: task.url, audioUrl: null };
     this.active.set(task.id, record);
+    task.selectedQuality = null;
+    task.availableQualities = [];
     try {
-      if (/\.m3u8(?:$|\?)/i.test(task.url)) {
-        record.isHls = true;
-        await this.checkHlsVod(task, record);
-      }
+      // Inspect extensionless playlist endpoints before probing so FFmpeg never
+      // opens every master rendition just to discover the selected video.
+      if (!/\.(?:mp4|m4v|mov|webm|mkv|ts)(?:$|[?#])/i.test(task.url)) await this.checkHlsVod(task, record);
+      if (record.cancelled || task.status !== 'downloading' || this.closing) { this.active.delete(task.id); this.schedule(); return; }
       record.probing = this.probeDuration(task, record);
       task.duration = await record.probing;
       record.probing = null;
-      if (record.isHls && !/\.m3u8(?:$|\?)/i.test(task.url) && !record.cancelled && !this.closing) await this.checkHlsVod(task, record);
+      if (record.isHls && !record.hlsResolved && !record.cancelled && !this.closing) await this.checkHlsVod(task, record);
       if (record.cancelled || task.status !== 'downloading' || this.closing) {
         this.active.delete(task.id);
         this.schedule();
@@ -355,9 +373,16 @@ export class DownloadManager {
       if (record.cancelled || task.status !== 'downloading' || this.closing) { this.active.delete(task.id); this.schedule(); return; }
       // FFmpeg reports a benign EIO at the end of chunked HLS manifests under
       // -xerror. For HLS, detect irreversible skipped segments explicitly instead.
-      const args = ['-nostdin', '-hide_banner', '-loglevel', 'warning', ...(record.isHls ? [] : ['-xerror']), '-n', ...this.inputArgs(task), '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5'];
-      if (record.isHls) args.push('-seg_max_retry', '2');
-      args.push('-i', task.url, '-c', 'copy');
+      const args = ['-nostdin', '-hide_banner', '-loglevel', 'warning', ...(record.isHls ? [] : ['-xerror']), '-n'];
+      const addInput = url => {
+        args.push(...this.inputArgs(task), '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5');
+        if (record.isHls) args.push('-seg_max_retry', '2');
+        args.push('-i', url);
+      };
+      addInput(record.videoUrl);
+      if (record.audioUrl) addInput(record.audioUrl);
+      if (record.isHls) args.push('-map', '0:v:0', '-map', record.audioUrl ? '1:a:0' : '0:a:0?');
+      args.push('-c', 'copy');
       if (task.format === 'mp4') args.push('-movflags', '+faststart');
       args.push('-f', task.format === 'ts' ? 'mpegts' : task.format === 'mkv' ? 'matroska' : 'mp4', '-progress', 'pipe:1', '-nostats', task.temporaryPath);
       let stderr = '';
@@ -442,9 +467,27 @@ export class DownloadManager {
   }
 
   async checkHlsVod(task, record) {
-    let manifestUrl = task.url;
-    for (let level = 0; level < 5; level++) {
-      if (record.cancelled || this.closing) return;
+    const video = await this.resolveHlsPlaylist(task, record, task.url, false);
+    if (!video || record.cancelled || this.closing) return;
+    record.videoUrl = video.url;
+    record.isHls = video.isHls;
+    record.manifestDuration = video.duration;
+    record.hlsResolved = true;
+    if (video.audioUrl) {
+      const audio = await this.resolveHlsPlaylist(task, record, video.audioUrl, true);
+      if (audio?.isHls) record.audioUrl = audio.url;
+      else if (audio) throw new ApiError('独立音轨不是有效的 HLS 清单，无法保留音频。');
+    }
+  }
+
+  async resolveHlsPlaylist(task, record, initialUrl, audioOnly) {
+    let manifestUrl = validateUrl(initialUrl);
+    let audioUrl = null;
+    const visited = new Set();
+    for (let level = 0; level < 8; level++) {
+      if (record.cancelled || this.closing) return null;
+      if (visited.has(manifestUrl)) throw new ApiError('视频清单存在循环引用，无法解析。');
+      visited.add(manifestUrl);
       const controller = new AbortController();
       record.preflight = controller;
       const timer = setTimeout(() => controller.abort(), 12000);
@@ -453,15 +496,40 @@ export class DownloadManager {
       try {
         const response = await fetch(manifestUrl, { signal: controller.signal, headers: { 'User-Agent': task.inputHeaders?.userAgent || DEFAULT_UA, ...(task.inputHeaders?.referer ? { Referer: task.inputHeaders.referer } : {}) } });
         if (!response.ok) throw new ApiError(`视频源返回 HTTP ${response.status}，请检查地址有效期及 Referer。`);
-        for await (const chunk of response.body) { text += Buffer.from(chunk).toString('utf8'); if (text.length > 2 * 1024 * 1024) { controller.abort(); throw new ApiError('视频清单过大，暂不支持此来源。'); } }
-        if (!text.trimStart().startsWith('#EXTM3U')) return;
+        const responseUrl = validateUrl(response.url);
+        // Stop immediately on a direct media response instead of buffering it.
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) { text += decoder.decode(); break; }
+            text += decoder.decode(value, { stream: true });
+            const prefix = text.replace(/^\uFEFF/, '').trimStart();
+            if (prefix.length >= 7 && !prefix.startsWith('#EXTM3U')) { await reader.cancel(); return { url: responseUrl, isHls: false, duration: null }; }
+            if (text.length > 2 * 1024 * 1024) { await reader.cancel(); throw new ApiError('视频清单过大，暂不支持此来源。'); }
+          }
+        } finally { reader.releaseLock(); }
+        if (!text.replace(/^\uFEFF/, '').trimStart().startsWith('#EXTM3U')) return { url: responseUrl, isHls: false, duration: null };
         if (/^#EXT-X-KEY:.*METHOD=(?:SAMPLE-AES|SAMPLE-AES-CTR)/m.test(text)) throw new ApiError('该视频使用 DRM 保护，暂不支持下载。');
-        const variants = [...text.matchAll(/^#EXT-X-STREAM-INF:([^\r\n]+)[\r\n]+([^#\r\n][^\r\n]*)/gm)].map(match => ({ url: new URL(match[2].trim(), response.url).href, bandwidth: Number(/(?:^|,)BANDWIDTH=(\d+)/.exec(match[1])?.[1] || 0) }));
-        if (variants.length) { variants.sort((a, b) => b.bandwidth - a.bandwidth); manifestUrl = validateUrl(variants[0].url); continue; }
+        const { variants, audioRenditions } = parseMasterPlaylist(text, responseUrl);
+        if (variants.length) {
+          const selected = chooseBestVariant(variants);
+          if (!audioOnly) {
+            if (!task.availableQualities?.length) task.availableQualities = variants.filter(variant => !variant.isAudioOnly).map(qualityMetadata);
+            const current = task.selectedQuality || {};
+            task.selectedQuality = qualityMetadata(Object.fromEntries(Object.entries({ ...current, ...selected }).map(([key, value]) => [key, value || current[key] || 0])));
+            const audio = chooseAudioRendition(audioRenditions, selected.audioGroup);
+            if (audio) audioUrl = audio.url ? validateUrl(audio.url) : null;
+          }
+          manifestUrl = validateUrl(selected.url);
+          continue;
+        }
         if (!/^#EXT-X-ENDLIST\s*$/m.test(text)) throw new ApiError('检测到持续更新的直播流。当前支持点播视频，请使用包含结束标记的 m3u8。');
-        return;
+        const duration = [...text.matchAll(/^#EXTINF:([\d.]+)/gm)].reduce((total, match) => total + Number(match[1]), 0) || null;
+        return { url: responseUrl, audioUrl, isHls: true, duration };
       } catch (error) {
-        if (record.cancelled || this.closing) return;
+        if (record.cancelled || this.closing) return null;
         if (error instanceof ApiError) throw error;
         throw new ApiError(error.name === 'AbortError' ? '视频清单请求超时，请检查链接后重试。' : '无法获取视频清单，请检查网络及请求头。');
       } finally { clearTimeout(timer); record.preflight = null; }
