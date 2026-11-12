@@ -1,0 +1,12 @@
+node_modules/
+.data/
+downloads/
+outputs/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+coverage/
+*.pem
+*.key

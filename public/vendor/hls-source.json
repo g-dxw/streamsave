@@ -1,0 +1,9 @@
+{
+  "sourceDir": "../hls.js",
+  "sourceRepository": "https://github.com/video-dev/hls.js",
+  "version": "1.7.4-10-gcb22168d8",
+  "revision": "cb22168d8088aceca4c6934d70d8d035be31d607",
+  "features": "full",
+  "builder": "esbuild",
+  "bundledAt": "2026-11-12T04:47:33.976Z"
+}

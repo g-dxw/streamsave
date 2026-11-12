@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="流存，本地视频批量下载工作台。批量导入视频流，管理并发、自定义保存目录和编号命名。">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="theme-color" content="#f7f8fa">
+  <title>流存 StreamSave · 视频下载工作台</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/vendor/hls.js" defer></script>
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">跳到工作台</a>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="流存首页"><span class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M8 8h5v12l-5 4zm8 0h8v5h-8zm0 8h8v8h-8z" fill="currentColor"/></svg></span><span>流存<span class="brand-en">StreamSave</span></span></a>
+    <span class="workspace-label">个人工作空间 <span class="local-tag">本地</span></span>
+    <nav aria-label="主导航">
+      <button class="nav-item active" data-view="all" aria-current="page"><span data-icon="squares-four"></span>下载工作台<span id="nav-count" class="nav-count">0</span></button>
+      <button class="nav-item" data-view="completed"><span data-icon="check-circle"></span>已完成<span id="nav-completed" class="nav-count">0</span></button>
+      <button class="nav-item" id="nav-folder"><span data-icon="folder-simple"></span>打开下载目录<span data-icon="arrow-up-right" class="nav-trailing"></span></button>
+    </nav>
+    <div class="sidebar-bottom">
+      <div class="local-note"><span class="local-note-icon" data-icon="hard-drives"></span><strong>文件留在你的电脑</strong><p>任务与设置保存在本地，<br>随时回来继续管理。</p><span class="note-status"><i></i>本地存储</span></div>
+      <button class="nav-item help-trigger"><span data-icon="question"></span>使用指南<span data-icon="arrow-up-right" class="nav-trailing"></span></button>
+      <div class="sidebar-footer"><span>StreamSave</span><span>v1.0</span></div>
+    </div>
+  </aside>
+
+  <div class="app-shell">
+    <header class="topbar"><div class="breadcrumb">工作空间<span>/</span><strong id="breadcrumb-current">下载工作台</strong></div><div class="topbar-right"><span class="connection" id="connection"><i></i>正在连接</span><span class="topbar-divider"></span><button class="icon-button help-trigger" aria-label="查看使用指南" title="使用指南"><span data-icon="question"></span></button><span class="avatar" aria-label="本地用户">本</span></div></header>
+    <main id="workspace">
+      <section class="page-heading"><div><div class="eyebrow">YOUR STREAMS, WELL SAVED</div><h1 id="page-title">下载，井然有序。</h1><p id="page-description">把视频流变成你的本地收藏。从一条链接，到一整个系列。</p></div><button class="button button-white" id="new-batch"><span data-icon="plus"></span>新建批次</button></section>
+
+      <section class="stats" aria-label="下载统计">
+        <article class="stat"><div><span>全部任务</span><strong id="stat-total">0<small>个视频</small></strong></div><span class="stat-icon" data-icon="stack"></span></article>
+        <article class="stat"><div><span>正在下载</span><strong id="stat-active">0<small>个任务</small></strong></div><span class="stat-icon teal" data-icon="download-simple"></span></article>
+        <article class="stat"><div><span>下载完成</span><strong id="stat-done">0<small>个视频</small></strong></div><span class="stat-icon" data-icon="check-circle"></span></article>
+        <article class="stat"><div><span>总下载速度</span><strong id="stat-speed">0<small>MB/s</small></strong></div><span class="stat-icon" data-icon="gauge"></span></article>
+      </section>
+
+      <div class="workspace-grid">
+        <div class="workspace-main">
+          <section class="panel import-panel" id="import-panel" aria-labelledby="import-heading">
+            <div class="panel-heading"><div class="heading-with-icon"><span class="heading-icon" data-icon="link"></span><h2 id="import-heading">批量添加视频</h2></div><label class="text-button file-import" for="file-import" role="button" tabindex="0"><span data-icon="upload-simple"></span>导入文件<input id="file-import" type="file" accept=".txt,.csv,text/plain,text/csv" hidden></label></div>
+            <p class="panel-description">每行一个视频流地址，也可以用「视频名称 | 地址」自定义名称。</p>
+            <div class="stream-editor"><div class="editor-gutter" id="editor-gutter" aria-hidden="true">01<br>02<br>03<br>04</div><label class="sr-only" for="stream-input">视频名称和视频流地址，每行一条</label><textarea id="stream-input" rows="4" spellcheck="false" placeholder="https://example.com/video-01/index.m3u8&#10;第一课：开始之前 | https://example.com/video-02/index.m3u8&#10;https://example.com/video-03.mp4"></textarea><span class="editor-type">URL / M3U8</span></div>
+            <div class="import-feedback" id="import-feedback" role="status" hidden></div>
+            <div class="import-bottom"><span class="import-hint"><span data-icon="info"></span><span id="import-count">支持 M3U8、MP4 等视频地址</span></span><div class="import-actions"><button class="text-button" id="load-example">试试示例</button><button class="button button-primary" id="add-tasks" disabled><span data-icon="plus"></span>添加到队列<span class="keycap">↵</span></button></div></div>
+          </section>
+
+          <section class="panel queue-panel" aria-labelledby="queue-heading">
+            <div class="panel-heading queue-heading"><div class="heading-with-icon"><span class="heading-icon" data-icon="list-bullets"></span><h2 id="queue-heading">下载队列</h2><span class="count-badge" id="queue-count">0</span></div><div class="queue-tools"><button class="icon-button" id="export-tasks" title="导出任务清单" aria-label="导出任务清单"><span data-icon="export"></span></button><button class="text-button" id="clear-completed" disabled><span data-icon="broom"></span>清理已完成</button></div></div>
+            <div class="queue-filters"><div class="filter-tabs" role="tablist" aria-label="筛选任务"><button role="tab" aria-selected="true" data-filter="all" class="filter-tab active">全部<span id="filter-all-count">0</span></button><button role="tab" aria-selected="false" data-filter="downloading" class="filter-tab">下载中<span id="filter-active-count">0</span></button><button role="tab" aria-selected="false" data-filter="completed" class="filter-tab">已完成<span id="filter-done-count">0</span></button><button role="tab" aria-selected="false" data-filter="failed" class="filter-tab">失败<span id="filter-failed-count">0</span></button></div><button id="retry-failed" class="text-button" hidden><span data-icon="arrow-clockwise"></span>重试失败</button></div>
+            <div class="queue-table-head"><span>视频名称</span><span>状态 / 进度</span><span>操作</span></div>
+            <div id="task-list" class="task-list">
+              <div class="empty-state"><div class="empty-art"><div class="empty-art-back"></div><div class="empty-art-front"><span data-icon="film-strip"></span><span class="empty-art-plus">+</span></div><i class="art-dot dot-one"></i><i class="art-dot dot-two"></i></div><h3>好内容，值得好好保存。</h3><p>添加你的第一批视频链接，<br>下载进度会在这里一目了然。</p><div class="empty-steps"><span>粘贴地址</span><span data-icon="arrow-right"></span><span>设置规则</span><span data-icon="arrow-right"></span><span>开始下载</span></div></div>
+            </div>
+            <div class="queue-footer"><span id="queue-footnote"><i class="tiny-dot"></i>准备就绪，等待添加任务</span><span>本地下载 · 自动保存</span></div>
+          </section>
+          <div class="workspace-caption"><span data-icon="shield-check"></span><span>直接保存到本地目录，不经过第三方存储。</span><button class="text-button help-trigger">了解工作方式<span data-icon="arrow-up-right"></span></button></div>
+        </div>
+
+        <aside class="panel settings-panel" aria-labelledby="settings-heading">
+          <div class="panel-heading"><div class="heading-with-icon"><span class="heading-icon" data-icon="sliders-horizontal"></span><h2 id="settings-heading">下载设置</h2></div><span class="settings-indicator" id="settings-state">已保存</span></div>
+          <form id="settings-form">
+            <section class="settings-section"><div class="setting-label"><label for="concurrency">同时下载任务</label><span class="mini-label">最大 8 个</span></div><div class="concurrency-control"><div><strong id="concurrency-display">3</strong><span>个任务并行</span></div><div class="stepper"><button type="button" id="concurrency-minus" aria-label="减少并发数">−</button><button type="button" id="concurrency-plus" aria-label="增加并发数">+</button></div></div><input id="concurrency" name="concurrency" type="range" min="1" max="8" value="3" aria-label="同时下载任务数"><div class="range-labels"><span>1 个 · 稳定优先</span><span>8 个 · 速度优先</span></div></section>
+            <section class="settings-section"><label for="output-dir">保存位置</label><div class="folder-input"><span data-icon="folder-simple"></span><input id="output-dir" name="outputDir" type="text" placeholder="输入本地文件夹绝对路径" required aria-describedby="directory-hint"><button type="button" id="pick-folder" class="icon-button" title="选择保存文件夹" aria-label="选择保存文件夹"><span data-icon="dots-three"></span></button></div><p class="field-hint" id="directory-hint">可直接输入路径，或点击右侧选择文件夹。</p><div class="setting-label format-label"><label for="format">保存格式</label></div><div class="select-wrap"><select id="format" name="format"><option value="mp4">MP4 视频</option><option value="mkv">MKV 视频</option><option value="ts">TS 视频</option></select><span data-icon="caret-down"></span></div></section>
+            <section class="settings-section naming-section"><div class="setting-label"><label for="naming-preset">文件命名</label><span class="mini-label">自动整理</span></div><div class="select-wrap"><select id="naming-preset"><option value="{number}_{name}">编号 + 视频名称</option><option value="{name}_{number}">视频名称 + 编号</option><option value="{name}">仅视频名称</option><option value="custom">自定义规则</option></select><span data-icon="caret-down"></span></div><div id="custom-pattern-field" hidden><label for="naming-pattern" class="field-hint">支持 {number}、{name}</label><input id="naming-pattern" name="namingPattern" type="text" value="{number}_{name}" required></div><div class="number-fields"><div><label for="start-number">起始编号</label><input id="start-number" name="startNumber" type="number" min="0" max="999999" value="1" required></div><div><label for="pad-width">编号位数</label><div class="select-wrap"><select id="pad-width" name="padWidth"><option value="1">1 位 · 1</option><option value="2">2 位 · 01</option><option value="3" selected>3 位 · 001</option><option value="4">4 位 · 0001</option><option value="5">5 位 · 00001</option><option value="6">6 位 · 000001</option></select><span data-icon="caret-down"></span></div></div></div><div class="naming-preview"><span>文件名预览</span><div><span data-icon="file-video"></span><strong id="filename-preview">001_视频名称.mp4</strong></div></div><p class="field-hint">同名文件自动添加后缀，保留已有文件。</p></section>
+            <details class="advanced-settings"><summary><span><span data-icon="gear-six"></span>高级设置</span><span data-icon="caret-down"></span></summary><div><label for="referer">Referer <span class="mini-label">可选</span></label><input id="referer" type="url" placeholder="https://视频来源网站"><label for="user-agent">User Agent <span class="mini-label">可选</span></label><input id="user-agent" type="text" placeholder="使用 FFmpeg 默认值"><p class="field-hint">需要来源校验的视频可在此填写请求头。</p></div></details>
+            <div class="settings-footer"><p class="settings-error" id="settings-error" role="alert" hidden></p><button class="button button-white save-settings" type="submit"><span data-icon="check"></span>保存设置</button><p>设置应用于后续启动的任务</p></div>
+          </form>
+        </aside>
+      </div>
+    </main>
+    <footer class="download-bar"><div class="overall-info"><span class="overall-icon" data-icon="download-simple"></span><div><strong id="overall-title">准备好，开始收藏。</strong><span id="overall-subtitle">添加视频链接后，即可开始批量下载</span></div></div><div class="overall-progress"><div><span>总体进度</span><strong id="overall-percent">0%</strong></div><div class="progress-track"><span id="overall-progress-bar"></span></div></div><div class="bar-actions"><button class="button button-white" id="pause-all" disabled><span data-icon="pause"></span>全部暂停</button><button class="button button-primary" id="start-all" disabled><span data-icon="play"></span>开始下载<span class="button-count" id="start-count">0</span></button></div></footer>
+  </div>
+  <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
+  <dialog id="preview-dialog" class="preview-dialog"><div class="dialog-header"><div><span class="eyebrow">VIDEO PREVIEW</span><h2 id="preview-title">视频预览</h2></div><button class="icon-button close-dialog" aria-label="关闭预览"><span data-icon="x"></span></button></div><video id="preview-video" controls playsinline preload="metadata"></video><div id="preview-message" class="preview-message" role="status">正在载入视频…</div></dialog>
+  <dialog id="edit-dialog"><form id="edit-form"><div class="dialog-header"><div><span class="eyebrow">EDIT VIDEO</span><h2>修改视频信息</h2></div><button type="button" class="icon-button close-dialog" aria-label="关闭编辑"><span data-icon="x"></span></button></div><label for="edit-name">视频名称</label><input id="edit-name" maxlength="160" required><label for="edit-number">视频编号</label><input id="edit-number" type="number" min="0" max="999999" required><p class="field-hint">完成的文件不会重命名，请在开始下载前修改。</p><p id="edit-error" class="settings-error" role="alert" hidden></p><div class="dialog-actions"><button type="button" class="button button-white close-dialog">取消</button><button type="submit" class="button button-primary">保存修改</button></div></form></dialog>
+  <dialog id="help-dialog" class="help-dialog"><div class="dialog-header"><div><span class="eyebrow">A LITTLE GUIDE</span><h2>从链接到本地视频</h2></div><button class="icon-button close-dialog" aria-label="关闭使用指南"><span data-icon="x"></span></button></div><ol class="guide-steps"><li><span>01</span><div><h3>把链接放进来</h3><p>每行粘贴一个 HTTP 或 HTTPS 视频地址。支持 M3U8 视频流和 MP4 等直链。也可以导入 TXT 或带 name、url 表头的 CSV 文件。</p></div></li><li><span>02</span><div><h3>按你的习惯整理</h3><p>选择本机保存目录、并发数、文件名和起始编号。先保存设置，再添加任务，每条任务也可以单独改名。</p></div></li><li><span>03</span><div><h3>点击下载，交给队列</h3><p>FFmpeg 会将视频流合并到本地文件。支持暂停、继续和失败重试。浏览器关闭后本地服务会继续工作；服务重启后的未完成任务需要重新下载。</p></div></li></ol><div class="guide-note"><span data-icon="info"></span><p>hls.js 用于在线播放预览。预览需要视频源允许跨域访问，跨域限制不会影响本地下载服务。当前支持点播视频，持续更新的直播流和 DRM 视频暂不支持。仅下载你有权保存的内容。</p></div><div class="system-checks" id="system-checks"></div><div class="dialog-actions"><button class="button button-primary close-dialog">开始使用</button></div></dialog>
+  <dialog id="confirm-dialog"><div class="dialog-header"><h2 id="confirm-title">移除任务</h2><button class="icon-button close-dialog" aria-label="关闭确认"><span data-icon="x"></span></button></div><p id="confirm-description"></p><div class="dialog-actions"><button class="button button-white close-dialog">取消</button><button class="button button-danger" id="confirm-action">移除任务</button></div></dialog>
+</body>
+</html>
